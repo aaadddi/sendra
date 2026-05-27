@@ -1,33 +1,77 @@
 package types
 
-import "time"
+import (
+	"context"
+	"net/http"
+	"time"
+)
 
 type Share struct {
-	ID               int       `json:"id"`
-	Token            string    `json:"token"`
-	FilePaths        []string  `json:"file_paths"`
-	CreatedAt        time.Time `json:"created_at"`
-	Label            string    `json:"label"`
-	DownloadURL      string    `json:"download_url"`
-	FileCount        int       `json:"file_count"`
-	TotalSize        int64     `json:"total_size"`
-	PrimaryName      string    `json:"primary_name"`
-	RecipientSummary string    `json:"recipient_summary"`
+	ID                int
+	Token             string
+	FilePaths         []string
+	Label             string
+	PrimaryName       string
+	PublicDownloadURL string
+	LocalDownloadURL  string
+	IsInternet        bool
+	IsLAN             bool
+	FileCount         int
+	TotalSize         int64
+	Password          string
+	Note              string
+	Downloads         int
+	CreatedAt         time.Time
+	ExpiresAt         *time.Time
 }
 
 type CreateResp struct {
-	Token         string `json:"token"`
-	DownloadURL   string `json:"download_url"`
-	ShareID       int    `json:"share_id"`
-	PublicBaseURL string `json:"public_base_url"`
+	Token            string `json:"token"`
+	DownloadURL      string `json:"download_url"`
+	LocalDownloadURL string `json:"local_download_url"`
+	ShareID          int    `json:"share_id"`
+	PublicBaseURL    string `json:"public_base_url"`
+	IsInternet       bool   `json:"is_internet"`
+	IsLAN            bool   `json:"is_lan"`
+	Password         string `json:"password,omitempty"`
+	Note             string `json:"note,omitempty"`
 }
 
 type TransferStats struct {
 	Token        string    `json:"token"`
+	SessionID    string    `json:"session_id"`
 	BytesWritten int64     `json:"bytes_written"`
 	TotalBytes   int64     `json:"total_bytes"`
 	Speed        float64   `json:"speed"` // bytes per second
 	IsActive     bool      `json:"is_active"`
 	StartTime    time.Time `json:"-"`
 	LastUpdated  time.Time `json:"-"`
+}
+
+type Connection struct {
+	SessionID    string
+	Token        string
+	IP           string
+	BytesWritten int64
+	Speed        float64
+	StartTime    time.Time
+	LastUpdated  time.Time
+	Cancel       context.CancelFunc
+	Cancelled    bool
+}
+
+type ProgressWriter struct {
+	w         http.ResponseWriter
+	token     string
+	sessionID string
+	lastTime  time.Time
+	lastBytes int64
+}
+
+type PageData struct {
+	Label              string
+	FileCount          int
+	TotalSizeFormatted string
+	Note               string
+	Error              string
 }

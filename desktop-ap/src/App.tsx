@@ -26,14 +26,16 @@ function App() {
   const [shares, setShares] = useState<ShareListItem[]>([]);
   const [sharesLoading, setSharesLoading] = useState(false);
   const [currentTab, setCurrentTab] = useState("transfers");
+  const [tunnelActive, setTunnelActive] = useState<boolean>(false);
   const dragDepth = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadShares = useCallback(async () => {
     setSharesLoading(true);
     try {
-      const next = await listShares();
-      setShares(next);
+      const res = await listShares();
+      setShares(res.shares);
+      setTunnelActive(res.tunnelActive);
     } catch {
       setShares([]);
     } finally {
@@ -44,8 +46,11 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     fetchBackendHealth()
-      .then(() => {
-        if (!cancelled) setBackendOk(true);
+      .then((res) => {
+        if (!cancelled) {
+          setBackendOk(true);
+          setTunnelActive(res.tunnel_active);
+        }
       })
       .catch(() => {
         if (!cancelled) setBackendOk(false);
@@ -60,7 +65,22 @@ function App() {
     void loadShares();
   }, [backendOk, loadShares]);
 
-  const isSharingActive = selectedFiles.some((f) => f.isSharing && f.shareLink);
+  useEffect(() => {
+    if (backendOk !== true) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const health = await fetchBackendHealth();
+        setTunnelActive(health.tunnel_active);
+      } catch (err) {
+        console.error("Failed to fetch health check status:", err);
+      }
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [backendOk]);
+
+  const isSharingActive = selectedFiles.some((f) => f.isSharing && (f.shareLink || f.localShareLink));
 
   useEffect(() => {
     if (!isSharingActive || backendOk !== true) return;
@@ -71,20 +91,31 @@ function App() {
         setSelectedFiles((files) => {
           let changed = false;
           const next = files.map((file) => {
-            const token = file.shareLink ? file.shareLink.split("/").pop() : null;
-            const stats = token ? transfers[token] : null;
+            const token = file.shareLink
+              ? file.shareLink.split("/").pop()
+              : file.localShareLink
+              ? file.localShareLink.split("/").pop()
+              : null;
+            const statsList = token ? transfers[token] : null;
 
-            const isDownloading = !!stats;
-            const bytesWritten = stats ? stats.bytes_written : file.bytesWritten;
-            const speed = stats ? stats.speed : undefined;
+            const isDownloading = !!statsList && statsList.length > 0;
+            const bytesWritten = statsList
+              ? statsList.reduce((sum, s) => sum + s.bytes_written, 0)
+              : file.bytesWritten || 0;
+            const speed = statsList
+              ? statsList.reduce((sum, s) => sum + s.speed, 0)
+              : undefined;
+
             const wasDownloading = file.isDownloading;
             const isCompleted = file.isCompleted || (wasDownloading && !isDownloading);
+            const activeDownloadsChanged = JSON.stringify(file.activeDownloads) !== JSON.stringify(statsList);
 
             if (
               file.isDownloading !== isDownloading ||
               file.bytesWritten !== bytesWritten ||
               file.speed !== speed ||
-              file.isCompleted !== isCompleted
+              file.isCompleted !== isCompleted ||
+              activeDownloadsChanged
             ) {
               changed = true;
               return {
@@ -93,6 +124,7 @@ function App() {
                 bytesWritten,
                 speed,
                 isCompleted,
+                activeDownloads: statsList || [],
               };
             }
             return file;
@@ -128,9 +160,16 @@ function App() {
       id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 9),
       isSharing: false,
       shareLink: null,
+      localShareLink: null,
+      shareInternet: true,
+      shareNearby: true,
       shareError: null,
       shareCreating: false,
       isActionsOpen: false,
+      passwordProtected: false,
+      passwordValue: "",
+      noteValue: "",
+      activeDownloads: [],
     }));
 
     setSelectedFiles((currentFiles) => [...currentFiles, ...filesWithState]);
@@ -214,13 +253,21 @@ function App() {
     );
 
     try {
-      const res = await createShare({ paths: [file.path] });
+      const res = await createShare({
+        paths: [file.path],
+        password: file.passwordProtected ? file.passwordValue : undefined,
+        note: file.passwordProtected ? file.noteValue : undefined,
+        isInternet: file.shareInternet,
+        isLAN: file.shareNearby,
+      });
+
       setSelectedFiles((files) =>
         files.map((f) =>
           f.id === id
             ? {
                 ...f,
-                shareLink: res.download_url,
+                shareLink: file.shareInternet ? res.download_url : null,
+                localShareLink: file.shareNearby ? res.local_download_url : null,
                 isSharing: true,
               }
             : f
@@ -235,6 +282,7 @@ function App() {
                 ...f,
                 isSharing: false,
                 shareLink: null,
+                localShareLink: null,
                 shareError: e instanceof Error ? e.message : "Could not create share",
               }
             : f
@@ -247,24 +295,16 @@ function App() {
     }
   };
 
-  const copyShareLink = async (id: string) => {
-    const file = selectedFiles.find((f) => f.id === id);
-    if (!file || !file.shareLink) return;
-    await navigator.clipboard.writeText(file.shareLink);
-  };
-
   const stopSharing = async (id: string) => {
     const file = selectedFiles.find((f) => f.id === id);
     if (!file) return;
 
-    if (file.shareLink) {
-      const token = file.shareLink.split("/").pop();
-      if (token) {
-        try {
-          await deleteShare(token);
-        } catch (e) {
-          console.error("Failed to delete share on backend:", e);
-        }
+    const token = (file.shareLink || file.localShareLink || "").split("/").pop();
+    if (token) {
+      try {
+        await deleteShare(token);
+      } catch (e) {
+        console.error("Failed to delete share on backend:", e);
       }
     }
 
@@ -275,6 +315,7 @@ function App() {
               ...f,
               isSharing: false,
               shareLink: null,
+              localShareLink: null,
               isActionsOpen: false,
               isCompleted: false,
             }
@@ -287,6 +328,36 @@ function App() {
   const toggleActions = (id: string) => {
     setSelectedFiles((files) =>
       files.map((f) => (f.id === id ? { ...f, isActionsOpen: !f.isActionsOpen } : f))
+    );
+  };
+
+  const toggleShareInternet = (id: string) => {
+    setSelectedFiles((files) =>
+      files.map((f) => (f.id === id ? { ...f, shareInternet: !f.shareInternet } : f))
+    );
+  };
+
+  const toggleShareNearby = (id: string) => {
+    setSelectedFiles((files) =>
+      files.map((f) => (f.id === id ? { ...f, shareNearby: !f.shareNearby } : f))
+    );
+  };
+
+  const togglePasswordProtected = (id: string) => {
+    setSelectedFiles((files) =>
+      files.map((f) => (f.id === id ? { ...f, passwordProtected: !f.passwordProtected } : f))
+    );
+  };
+
+  const changePasswordValue = (id: string, val: string) => {
+    setSelectedFiles((files) =>
+      files.map((f) => (f.id === id ? { ...f, passwordValue: val } : f))
+    );
+  };
+
+  const changeNoteValue = (id: string, val: string) => {
+    setSelectedFiles((files) =>
+      files.map((f) => (f.id === id ? { ...f, noteValue: val } : f))
     );
   };
 
@@ -323,10 +394,23 @@ function App() {
                       Online
                     </span>
                     <span className="header-status-item">
-                      <svg className="shield-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--success)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <svg
+                        className="shield-icon"
+                        width="12"
+                        height="12"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke={tunnelActive ? "var(--success)" : "var(--text-muted)"}
+                        strokeWidth="2.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        style={{ color: tunnelActive ? "var(--success)" : "var(--text-muted)" }}
+                      >
                         <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
                       </svg>
-                      Tunnel active
+                      <span style={{ color: tunnelActive ? "var(--text-primary)" : "var(--text-secondary)", opacity: tunnelActive ? 1 : 0.7 }}>
+                        {tunnelActive ? "Tunnel active" : "Tunnel inactive"}
+                      </span>
                     </span>
                   </div>
                 )}
@@ -366,13 +450,7 @@ function App() {
                       <h3 className="section-title">Active Transfers</h3>
                       <span className="count-badge">{selectedFiles.length}</span>
                     </div>
-                    <div
-                      className="file-cards-list"
-                      style={{
-                        maxHeight: "45vh",
-                        overflowY: "auto",
-                      }}
-                    >
+                    <div className="file-cards-list">
                       {selectedFiles.map((file) => (
                         <FileCard
                           key={file.id}
@@ -380,8 +458,12 @@ function App() {
                           onToggleActions={() => toggleActions(file.id)}
                           onRemoveFile={() => removeFile(file.id)}
                           onStartSharing={() => void startSharing(file.id)}
-                          onCopyShareLink={() => void copyShareLink(file.id)}
                           onStopSharing={() => void stopSharing(file.id)}
+                          onToggleShareInternet={() => toggleShareInternet(file.id)}
+                          onToggleShareNearby={() => toggleShareNearby(file.id)}
+                          onTogglePasswordProtected={() => togglePasswordProtected(file.id)}
+                          onChangePasswordValue={(val) => changePasswordValue(file.id, val)}
+                          onChangeNoteValue={(val) => changeNoteValue(file.id, val)}
                         />
                       ))}
                     </div>

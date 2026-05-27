@@ -7,7 +7,7 @@ type HistoryViewProps = {
   loading?: boolean;
 };
 
-const getExtClass = (name: string) => {
+const getExtClass = (name: string = "") => {
   const ext = getExtension(name).toLowerCase();
   if (ext === "pdf") return "ext-pdf";
   if (["zip", "rar", "tar", "gz", "7z"].includes(ext)) return "ext-zip";

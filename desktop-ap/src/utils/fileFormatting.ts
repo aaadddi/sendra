@@ -9,7 +9,8 @@ export const formatFileSize = (size?: number) => {
   return `${value >= 10 || exponent === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[exponent]}`;
 };
 
-export const getExtension = (fileName: string) => {
+export const getExtension = (fileName: string = "") => {
+  if (!fileName) return "FILE";
   const extension = fileName.split(".").pop();
   return extension && extension !== fileName ? extension.slice(0, 4).toUpperCase() : "FILE";
 };

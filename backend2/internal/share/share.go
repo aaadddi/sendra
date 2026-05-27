@@ -11,9 +11,14 @@ import (
 )
 
 var (
-	shares = map[string]types.Share{}
-	nextID = 1
-	mu     sync.RWMutex
+	shares            = map[string]types.Share{}
+	nextID            = 1
+	mu                sync.RWMutex
+	TunnelURL         string
+	BlockedIPs        = map[string]bool{} // key: token + "_" + ip
+	TransfersMu       sync.RWMutex
+	ActiveConnections = map[string]*types.Connection{}
+	CumulativeBytes   = map[string]int64{} // key: token + "_" + ip
 )
 
 func generateToken() string {
@@ -25,7 +30,7 @@ func generateToken() string {
 	return hex.EncodeToString(bytes)
 }
 
-func Create(paths []string, label string, publicBaseURL string) (types.Share, error) {
+func Create(paths []string, label string, publicBaseURL string, localBaseURL string, password string, note string, isInternet bool, isLAN bool) (types.Share, error) {
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -56,16 +61,20 @@ func Create(paths []string, label string, publicBaseURL string) (types.Share, er
 	nextID++
 
 	s := types.Share{
-		ID:               id,
-		Token:            token,
-		FilePaths:        paths,
-		CreatedAt:        time.Now(),
-		Label:            label,
-		DownloadURL:      fmt.Sprintf("%s/share/%s", publicBaseURL, token),
-		FileCount:        len(paths),
-		TotalSize:        totalSize,
-		PrimaryName:      primaryName,
-		RecipientSummary: "",
+		ID:                id,
+		Token:             token,
+		FilePaths:         paths,
+		CreatedAt:         time.Now(),
+		Label:             label,
+		PublicDownloadURL: fmt.Sprintf("%s/share/%s", publicBaseURL, token),
+		LocalDownloadURL:  fmt.Sprintf("%s/share/%s", localBaseURL, token),
+		IsInternet:        isInternet,
+		IsLAN:             isLAN,
+		FileCount:         len(paths),
+		TotalSize:         totalSize,
+		PrimaryName:       primaryName,
+		Password:          password,
+		Note:              note,
 	}
 
 	shares[token] = s
